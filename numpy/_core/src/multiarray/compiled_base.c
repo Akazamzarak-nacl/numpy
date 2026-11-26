@@ -284,6 +284,262 @@ fail:
     return NULL;
 }
 
+NPY_NO_EXPORT PyObject *
+arr_histogramdd_uniform2d(PyObject *NPY_UNUSED(self), PyObject *const *args,
+                          Py_ssize_t len_args, PyObject *kwnames)
+{
+    PyObject *sample_obj = NULL;
+    PyObject *nx_obj = NULL, *ny_obj = NULL;
+    PyObject *xmin_obj = NULL, *xmax_obj = NULL;
+    PyObject *ymin_obj = NULL, *ymax_obj = NULL;
+    PyArrayObject *sample = NULL, *hist = NULL;
+    npy_intp nx, ny, dims[2];
+    npy_intp i, n;
+    npy_intp last_index = -1;
+    npy_bool monotonic_index = NPY_TRUE;
+    double xmin, xmax, ymin, ymax;
+    double xscale, yscale;
+    double run_count = 0.0;
+    double *sample_data, *hist_data;
+
+    NPY_PREPARE_ARGPARSER;
+    if (npy_parse_arguments("_histogramdd_uniform2d", args, len_args, kwnames,
+                "sample", NULL, &sample_obj,
+                "nx", NULL, &nx_obj,
+                "ny", NULL, &ny_obj,
+                "xmin", NULL, &xmin_obj,
+                "xmax", NULL, &xmax_obj,
+                "ymin", NULL, &ymin_obj,
+                "ymax", NULL, &ymax_obj,
+                NULL, NULL, NULL) < 0) {
+        return NULL;
+    }
+
+    nx = PyArray_PyIntAsIntp(nx_obj);
+    if (error_converting(nx)) {
+        return NULL;
+    }
+    ny = PyArray_PyIntAsIntp(ny_obj);
+    if (error_converting(ny)) {
+        return NULL;
+    }
+    xmin = PyFloat_AsDouble(xmin_obj);
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    xmax = PyFloat_AsDouble(xmax_obj);
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    ymin = PyFloat_AsDouble(ymin_obj);
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    ymax = PyFloat_AsDouble(ymax_obj);
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+
+    if (nx < 1 || ny < 1) {
+        PyErr_SetString(PyExc_ValueError, "bins must be positive");
+        return NULL;
+    }
+    if (nx > NPY_MAX_INTP / ny ||
+            nx * ny > NPY_MAX_INTP / (npy_intp)sizeof(double)) {
+        PyErr_SetString(PyExc_ValueError, "histogram is too large");
+        return NULL;
+    }
+    if (!(npy_isfinite(xmin) && npy_isfinite(xmax) && xmin < xmax &&
+          npy_isfinite(ymin) && npy_isfinite(ymax) && ymin < ymax)) {
+        PyErr_SetString(PyExc_ValueError, "range must be finite and increasing");
+        return NULL;
+    }
+
+    sample = (PyArrayObject *)PyArray_FromAny(sample_obj,
+            PyArray_DescrFromType(NPY_DOUBLE), 2, 2,
+            NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED, NULL);
+    if (sample == NULL) {
+        return NULL;
+    }
+    if (PyArray_DIM(sample, 1) != 2) {
+        PyErr_SetString(PyExc_ValueError, "sample must have shape (N, 2)");
+        Py_DECREF(sample);
+        return NULL;
+    }
+
+    dims[0] = nx;
+    dims[1] = ny;
+    hist = (PyArrayObject *)PyArray_ZEROS(2, dims, NPY_DOUBLE, 0);
+    if (hist == NULL) {
+        Py_DECREF(sample);
+        return NULL;
+    }
+
+    n = PyArray_DIM(sample, 0);
+    sample_data = (double *)PyArray_DATA(sample);
+    hist_data = (double *)PyArray_DATA(hist);
+    xscale = (double)nx / (xmax - xmin);
+    yscale = (double)ny / (ymax - ymin);
+
+    NPY_BEGIN_ALLOW_THREADS;
+    for (i = 0; i < n; i++) {
+        double x = sample_data[2 * i];
+        double y = sample_data[2 * i + 1];
+        npy_intp ix, iy, flat_index;
+
+        if (!(x >= xmin && x <= xmax && y >= ymin && y <= ymax)) {
+            continue;
+        }
+        ix = (x == xmax) ? (nx - 1) : (npy_intp)((x - xmin) * xscale);
+        iy = (y == ymax) ? (ny - 1) : (npy_intp)((y - ymin) * yscale);
+
+        if (ix >= 0 && ix < nx && iy >= 0 && iy < ny) {
+            flat_index = ix * ny + iy;
+            if (flat_index == last_index) {
+                run_count += 1.0;
+            }
+            else {
+                if (last_index >= 0) {
+                    if (monotonic_index) {
+                        hist_data[last_index] = run_count;
+                    }
+                    else {
+                        hist_data[last_index] += run_count;
+                    }
+                }
+                if (flat_index < last_index) {
+                    monotonic_index = NPY_FALSE;
+                }
+                last_index = flat_index;
+                run_count = 1.0;
+            }
+        }
+    }
+    if (last_index >= 0) {
+        if (monotonic_index) {
+            hist_data[last_index] = run_count;
+        }
+        else {
+            hist_data[last_index] += run_count;
+        }
+    }
+    NPY_END_ALLOW_THREADS;
+
+    Py_DECREF(sample);
+    return (PyObject *)hist;
+}
+
+NPY_NO_EXPORT PyObject *
+arr_fused_var_double_contig(PyObject *NPY_UNUSED(self), PyObject *const *args,
+                            Py_ssize_t len_args, PyObject *kwnames)
+{
+    PyObject *arr_obj = NULL;
+    PyObject *ddof_obj = NULL;
+    PyArrayObject *arr = NULL;
+    npy_intp n;
+    const double *data;
+    double mean_val, variance_val;
+    npy_intp ddof_i = 0;
+    npy_intp rcount;
+
+    NPY_PREPARE_ARGPARSER;
+    if (npy_parse_arguments("_fused_var_double_contig", args, len_args, kwnames,
+                "arr", NULL, &arr_obj,
+                "ddof", NULL, &ddof_obj,
+                NULL, NULL, NULL) < 0) {
+        return NULL;
+    }
+
+    ddof_i = PyArray_PyIntAsIntp(ddof_obj);
+    if (error_converting(ddof_i)) {
+        return NULL;
+    }
+
+    arr = (PyArrayObject *)PyArray_FromAny(arr_obj,
+            PyArray_DescrFromType(NPY_DOUBLE), 1, 1,
+            NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED, NULL);
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    n = PyArray_SIZE(arr);
+    data = (const double *)PyArray_DATA(arr);
+
+    if (n == 0) {
+        Py_DECREF(arr);
+        PyErr_SetString(PyExc_ValueError, "array must not be empty");
+        return NULL;
+    }
+
+    rcount = n - ddof_i;
+    if (rcount <= 0) {
+        Py_DECREF(arr);
+        PyErr_SetString(PyExc_ValueError, "ddof must be less than array size");
+        return NULL;
+    }
+
+    /*
+     * Two-pass fused variance: pass 1 computes sum for mean, pass 2
+     * fuses (x-mean)^2 accumulation.  ARM NEON uses npyv_muladd_f64
+     * (FMA) to combine subtract+square+accumulate per lane.
+     */
+    {
+        NPY_BEGIN_ALLOW_THREADS
+
+        double sum = 0.0;
+#if defined(NPY_HAVE_NEON) || defined(NPY_HAVE_ASIMD) || defined(NPY_HAVE_SVE)
+        {
+            npy_intp i = 0;
+            npyv_f64 vsum = npyv_zero_f64();
+            const npy_intp simd_width = npyv_nlanes_f64;
+            for (; i + simd_width <= n; i += simd_width) {
+                vsum = npyv_add_f64(vsum, npyv_load_f64(data + i));
+            }
+            sum = npyv_sum_f64(vsum);
+            for (; i < n; ++i) {
+                sum += data[i];
+            }
+        }
+#else
+        for (npy_intp i = 0; i < n; ++i) {
+            sum += data[i];
+        }
+#endif
+        mean_val = sum / (double)n;
+
+        double sq_sum = 0.0;
+#if defined(NPY_HAVE_NEON) || defined(NPY_HAVE_ASIMD) || defined(NPY_HAVE_SVE)
+        {
+            npy_intp i = 0;
+            const npyv_f64 vmean = npyv_setall_f64(mean_val);
+            npyv_f64 vsq_sum = npyv_zero_f64();
+            const npy_intp simd_width = npyv_nlanes_f64;
+            for (; i + simd_width <= n; i += simd_width) {
+                npyv_f64 v = npyv_load_f64(data + i);
+                v = npyv_sub_f64(v, vmean);
+                vsq_sum = npyv_muladd_f64(v, v, vsq_sum);
+            }
+            sq_sum = npyv_sum_f64(vsq_sum);
+            for (; i < n; ++i) {
+                double d = data[i] - mean_val;
+                sq_sum += d * d;
+            }
+        }
+#else
+        for (npy_intp i = 0; i < n; ++i) {
+            double d = data[i] - mean_val;
+            sq_sum += d * d;
+        }
+#endif
+        variance_val = sq_sum / (double)rcount;
+
+        NPY_END_ALLOW_THREADS
+    }
+
+    Py_DECREF(arr);
+    return PyFloat_FromDouble(variance_val);
+}
+
 /* Internal function to expose check_array_monotonic to python */
 NPY_NO_EXPORT PyObject *
 arr__monotonicity(PyObject *NPY_UNUSED(self), PyObject *args, PyObject *kwds)

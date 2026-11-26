@@ -124,6 +124,8 @@ else
   highway_lib = []
 endif
 
+cdata.set10('NPY_HAVE_HIGHWAY', use_highway)
+
 use_intel_sort = not get_option('disable-intel-sort') and cpu_family in ['x86', 'x86_64']
 if use_intel_sort and not fs.exists('src/npysort/x86-simd-sort/README.md')
   error('Missing the `x86-simd-sort` git submodule! Run `git submodule update --init` to fix this.')
@@ -945,6 +947,14 @@ foreach gen_mtargets : [
       LSX,
     ]
   ],
+
+  [
+    'loops_arithmetic_floor_hwy.dispatch.h',
+    'src/umath/loops_arithmetic_floor_hwy.dispatch.cpp',
+    use_highway ? [
+      SVE, ASIMD, NEON
+    ] : []
+  ],
   [
     'loops_comparison.dispatch.h',
     src_file.process('src/umath/loops_comparison.dispatch.c.src'),
@@ -1237,6 +1247,10 @@ src_umath = umath_gen_headers + [
   'src/umath/stringdtype_ufuncs.cpp',
   'src/umath/wrapping_array_method.c',
   # For testing. Eventually, should use public API and be separate:
+
+  # Highway SIMD floor division
+  'src/umath/loops_arithmetic_floor_hwy.h',
+  'src/umath/loops_arithmetic_floor_hwy_avail.c',
   'src/umath/_scaled_float_dtype.c',
 ]
 
