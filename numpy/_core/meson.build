@@ -124,6 +124,8 @@ else
   highway_lib = []
 endif
 
+cdata.set10('NPY_HAVE_HIGHWAY', use_highway)
+
 use_intel_sort = not get_option('disable-intel-sort') and cpu_family in ['x86', 'x86_64']
 if use_intel_sort and not fs.exists('src/npysort/x86-simd-sort/README.md')
   error('Missing the `x86-simd-sort` git submodule! Run `git submodule update --init` to fix this.')
@@ -945,6 +947,15 @@ foreach gen_mtargets : [
       LSX,
     ]
   ],
+
+  [
+    'loops_complex_maxmin.dispatch.h',
+    'src/umath/loops_complex_maxmin.dispatch.cpp',
+    use_highway ? [
+      X86_V4, X86_V3,
+      SVE, ASIMD, NEON
+    ] : []
+  ],
   [
     'loops_comparison.dispatch.h',
     src_file.process('src/umath/loops_comparison.dispatch.c.src'),
@@ -955,6 +966,27 @@ foreach gen_mtargets : [
       VXE, VX,
       LSX,
     ]
+  ],
+
+  [
+    'loops_exp.dispatch.h',
+    'src/umath/loops_exp.dispatch.cpp',
+    (use_highway ? [SVE, ASIMD, NEON] : []) + [X86_V4, X86_V3]
+  ],
+  [
+    'loops_log.dispatch.h',
+    'src/umath/loops_log.dispatch.cpp',
+    (use_highway ? [SVE, ASIMD, NEON] : []) + [X86_V4, X86_V3]
+  ],
+  [
+    'loops_exp2.dispatch.h',
+    'src/umath/loops_exp2.dispatch.cpp',
+    (use_highway ? [SVE, ASIMD, NEON] : []) + [X86_V4, X86_V3]
+  ],
+  [
+    'loops_log2.dispatch.h',
+    'src/umath/loops_log2.dispatch.cpp',
+    (use_highway ? [SVE, ASIMD, NEON] : []) + [X86_V4, X86_V3]
   ],
   [
     'loops_exponent_log.dispatch.h',
@@ -1008,17 +1040,33 @@ foreach gen_mtargets : [
     'loops_trigonometric.dispatch.h',
     'src/umath/loops_trigonometric.dispatch.cpp',
     [
-      X86_V4, X86_V3,
+      AVX512_SPR, X86_V4, X86_V3,
       VSX4, VSX3, VSX2,
+      ASIMD, NEON,
       NEON_VFPV4,
       VXE2, VXE,
       LSX,
     ]
   ],
+
+  [
+    'loops_power.dispatch.h',
+    'src/umath/loops_power.dispatch.cpp',
+    [X86_V4, X86_V3, SVE, NEON_VFPV4]
+  ],
   [
     'loops_umath_fp.dispatch.h',
     src_file.process('src/umath/loops_umath_fp.dispatch.c.src'),
     [X86_V4]
+  ],
+
+  [
+    'loops_umath_unary.dispatch.h',
+    'src/umath/loops_umath_unary.dispatch.cpp',
+    [
+      AVX512_SPR, X86_V4,
+      ASIMD, NEON,
+    ]
   ],
   [
     'loops_unary.dispatch.h',
@@ -1104,6 +1152,45 @@ foreach gen_mtargets : [
     multiarray_umath_mtargets.extend(mtargets)
   endif
 endforeach
+
+
+# Build aarch64-only dispatch-able sources
+# These targets only have aarch64 implementations, so skip them entirely
+# on other platforms to avoid compiling empty baseline fallbacks.
+# -----------------------------------------
+if cpu_family == 'aarch64'
+  foreach gen_mtargets : [
+    [
+      'loops_unary_fp_ops.dispatch.h',
+      'src/umath/loops_unary_fp_ops.dispatch.cpp',
+      [ASIMDHP, NEON],
+    ],
+  ]
+    mtargets = mod_features.multi_targets(
+      gen_mtargets[0], umath_gen_headers + gen_mtargets[1],
+      dispatch: gen_mtargets[2],
+      baseline: CPU_BASELINE,
+      prefix: 'NPY_',
+      dependencies: [py_dep, np_core_dep],
+      c_args: c_args_common + max_opt,
+      cpp_args: cpp_args_common + max_opt,
+      include_directories: [
+        'include',
+        'src/common',
+        'src/multiarray',
+        'src/multiarray/stringdtype',
+        'src/npymath',
+        'src/umath',
+        'src/highway',
+      ]
+    )
+    if not is_variable('multiarray_umath_mtargets')
+      multiarray_umath_mtargets = mtargets
+    else
+      multiarray_umath_mtargets.extend(mtargets)
+    endif
+  endforeach
+endif
 
 # Build _multiarray_umath module
 # ------------------------------
@@ -1237,7 +1324,29 @@ src_umath = umath_gen_headers + [
   'src/umath/stringdtype_ufuncs.cpp',
   'src/umath/wrapping_array_method.c',
   # For testing. Eventually, should use public API and be separate:
+
+  # Highway SIMD complex maximum/minimum (dispatched via multi_targets below)
+  'src/umath/loops_complex_maxmin.h',
   'src/umath/_scaled_float_dtype.c',
+
+if cpu_family == 'aarch64'
+  src_umath += [
+    # AArch64 SVE bitwise specializations
+    'src/umath/loops_sve_utils.h',
+    'src/umath/loops_bitwise_sve.c',
+    'src/umath/loops_bitwise_sve.h',
+    # AArch64 SVE logical specializations
+    'src/umath/loops_logical_sve.c',
+    'src/umath/loops_logical_sve.h',
+    # AArch64 logical_not specializations
+    'src/umath/loops_logical_not_aarch64.c',
+    'src/umath/loops_logical_not_aarch64.h',
+    # AArch64 SVE shift scalar-input specialization
+    'src/umath/loops_shift_sve.c',
+    'src/umath/loops_shift_sve.h',
+  ]
+endif
+
 ]
 
 # SVML object files. If functionality is migrated to universal intrinsics and
