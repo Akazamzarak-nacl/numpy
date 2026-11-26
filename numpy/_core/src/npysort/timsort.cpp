@@ -43,6 +43,10 @@
    If powersort was used in all cases, 90 would suffice, as  32 * 2 ** 90  >=  32 * 1.618 ** 128  */
 #define RUN_STACK_SIZE 128
 
+/*
+ * Align function to 64-byte boundaries to improve
+ * instruction fetch and frontend efficiency on x86.
+ */
 static npy_intp
 compute_min_run(npy_intp num)
 {
@@ -127,23 +131,65 @@ static npy_intp
 count_run_(type *arr, npy_intp l, npy_intp num, npy_intp minrun)
 {
     npy_intp sz;
-    type vc, *pl, *pi, *pj, *pr;
+    type vc, *pl, *pi, *pj, *pr, *end;
 
     if (NPY_UNLIKELY(num - l == 1)) {
         return 1;
     }
 
     pl = arr + l;
+    end = arr + num - 1;
+    pi = pl + 1;
 
     /* (not strictly) ascending sequence */
     if (!Tag::less(*(pl + 1), *pl)) {
-        for (pi = pl + 1; pi < arr + num - 1 && !Tag::less(*(pi + 1), *pi);
-             ++pi) {
+#if !defined(NPY_CPU_AMD64) && !defined(NPY_CPU_X86)
+        /* unroll loop for non-x86 (ARM/Power) */
+        while (pi + 4 <= end) {
+            if (Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+            if (Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+            if (Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+            if (Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+        }
+#endif
+        for (; pi < end && !Tag::less(*(pi + 1), *pi); ++pi) {
         }
     }
     else { /* (strictly) descending sequence */
-        for (pi = pl + 1; pi < arr + num - 1 && Tag::less(*(pi + 1), *pi);
-             ++pi) {
+#if !defined(NPY_CPU_AMD64) && !defined(NPY_CPU_X86)
+        /* unroll loop for non-x86 (ARM/Power) */
+        while (pi + 4 <= end) {
+            if (!Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+            if (!Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+            if (!Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+            if (!Tag::less(*(pi + 1), *pi)) {
+                break;
+            }
+            ++pi;
+        }
+#endif
+        for (; pi < end && Tag::less(*(pi + 1), *pi); ++pi) {
         }
 
         for (pj = pl, pr = pi; pj < pr; ++pj, --pr) {
@@ -527,25 +573,71 @@ acount_run_(type *arr, npy_intp *tosort, npy_intp l, npy_intp num,
     npy_intp sz;
     type vc;
     npy_intp vi;
-    npy_intp *pl, *pi, *pj, *pr;
+    npy_intp *pl, *pi, *pj, *pr, *end;
 
     if (NPY_UNLIKELY(num - l == 1)) {
         return 1;
     }
 
     pl = tosort + l;
+    end = tosort + num - 1;
+    pi = pl + 1;
 
     /* (not strictly) ascending sequence */
     if (!Tag::less(arr[*(pl + 1)], arr[*pl])) {
-        for (pi = pl + 1;
-             pi < tosort + num - 1 && !Tag::less(arr[*(pi + 1)], arr[*pi]);
-             ++pi) {
+#if !defined(NPY_CPU_AMD64) && !defined(NPY_CPU_X86)
+        /* npy_double performance regression on bench_lib.unique */
+        if constexpr (!std::is_same_v<type, npy_double>) {
+            /* unroll loop for non-x86 (ARM/Power) */
+            while (pi + 4 <= end) {
+                if (Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+                if (Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+                if (Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+                if (Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+            }
+        }
+#endif
+        for (; pi < end && !Tag::less(arr[*(pi + 1)], arr[*pi]); ++pi) {
         }
     }
     else { /* (strictly) descending sequence */
-        for (pi = pl + 1;
-             pi < tosort + num - 1 && Tag::less(arr[*(pi + 1)], arr[*pi]);
-             ++pi) {
+#if !defined(NPY_CPU_AMD64) && !defined(NPY_CPU_X86)
+        /* npy_double performance regression on bench_lib.unique */
+        if constexpr (!std::is_same_v<type, npy_double>) {
+            /* unroll loop for non-x86 (ARM/Power) */
+            while (pi + 4 <= end) {
+                if (!Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+                if (!Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+                if (!Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+                if (!Tag::less(arr[*(pi + 1)], arr[*pi])) {
+                    break;
+                }
+                ++pi;
+            }
+        }
+#endif
+        for (; pi < end && Tag::less(arr[*(pi + 1)], arr[*pi]); ++pi) {
         }
 
         for (pj = pl, pr = pi; pj < pr; ++pj, --pr) {

@@ -124,6 +124,15 @@ else
   highway_lib = []
 endif
 
+# Highway accelerates arg-sort/arg-select on non-x86 platforms. vqsort's
+# pivot sampling is made deterministic for those paths (see
+# src/npysort/highway_qsort_determinism.hpp); this option is the escape
+# hatch back to the built-in introsort/introselect.
+use_highway_argsort = use_highway and not get_option('disable-highway-argsort')
+cdata.set10('NPY_HAVE_HIGHWAY_ARGSORT', use_highway_argsort)
+
+cdata.set10('NPY_HAVE_HIGHWAY', use_highway)
+
 use_intel_sort = not get_option('disable-intel-sort') and cpu_family in ['x86', 'x86_64']
 if use_intel_sort and not fs.exists('src/npysort/x86-simd-sort/README.md')
   error('Missing the `x86-simd-sort` git submodule! Run `git submodule update --init` to fix this.')
@@ -823,7 +832,6 @@ foreach gen_mtargets : [
     [
       X86_V4, X86_V3, X86_V2,
       VSX2,
-      ASIMD, NEON,
       VXE, VX
     ]
   ],
@@ -852,6 +860,34 @@ foreach gen_mtargets : [
   endif
 endforeach
 
+
+if cpu_family == 'aarch64'
+  mtargets = mod_features.multi_targets(
+    'highway_argfunc.dispatch.h',
+    multiarray_gen_headers + ['src/multiarray/highway_argfunc.dispatch.cpp'],
+    dispatch: use_highway ? [SVE, ASIMD, NEON] : [],
+    baseline: CPU_BASELINE,
+    prefix: 'NPY_',
+    dependencies: [py_dep, np_core_dep],
+    c_args: c_args_common + max_opt,
+    cpp_args: cpp_args_common + max_opt,
+    include_directories: [
+      'include',
+      'src/common',
+      'src/multiarray',
+      'src/multiarray/stringdtype',
+      'src/npymath',
+      'src/umath',
+      'src/highway',
+    ]
+  )
+  if not is_variable('multiarray_umath_mtargets')
+    multiarray_umath_mtargets = mtargets
+  else
+    multiarray_umath_mtargets.extend(mtargets)
+  endif
+endif
+
 # Build npysort dispatch-able sources
 # -----------------------------------
 foreach gen_mtargets : [
@@ -876,7 +912,7 @@ foreach gen_mtargets : [
     'highway_qsort.dispatch.h',
     'src/npysort/highway_qsort.dispatch.cpp',
     use_highway ? [
-      ASIMD, VSX2,  # FIXME: disable VXE due to runtime segfault
+      SVE, ASIMD, VSX2,  # FIXME: disable VXE due to runtime segfault
     ] : []
   ],
   [
@@ -884,6 +920,14 @@ foreach gen_mtargets : [
     'src/npysort/highway_qsort_16bit.dispatch.cpp',
     use_highway ? [
       ASIMDHP, VSX2,  # VXE FIXME: disable VXE due to runtime segfault
+    ] : []
+  ],
+
+  [
+    'partition_highway.dispatch.h',
+    'src/npysort/partition_highway.dispatch.cpp',
+    use_highway ? [
+      ASIMD, VSX2,  # VXE FIXME: disable VXE due to runtime segfault
     ] : []
   ],
 ]
